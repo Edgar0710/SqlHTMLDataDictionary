@@ -1,0 +1,154 @@
+USE bd
+GO
+/****** Object:  UserDefinedFunction [dbo].[GetDataDictionary]    Script Date: 06/11/2020 09:50:08 a. m. ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+alter function [dbo].[GetDataDictionary]()
+Returns  varchar(max)
+as 
+Begin
+----Estructurar HTML
+declare @Html varchar(max)='<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.6.3/css/all.css" integrity="sha384-UHRtZLI+pbxtHCWp1t77Bi1L4ZtiqrqD80Kn4Z8NTSRyMA2Fd33n5dQ8lWUE00s/" crossorigin="anonymous">
+<link rel="stylesheet" href="https://unpkg.com/bootstrap-table@1.18.0/dist/bootstrap-table.min.css">
+<head>
+<body>
+<nav class="navbar navbar-expand-md bg-dark navbar-dark text-center">
+  <h2 class="navbar-brand m"> Base de datos: '+(select DB_NAME())+'</h2>
+</nav>
+<div  class="container" style="margin-top:80px">
+<div class="row">
+<div class="col-md-3">
+<div class="card"> 
+<div class="card-body">
+<h3>Tablas</h3>
+<ul class="list-group">
+@indexTables
+<ul>
+</div>
+</div>
+</div>
+<div class="col-md-9 card" id="accordion"> 
+
+';
+
+declare @tables as table(id int,tb_name varchar(255));
+INSERT INTO @tables SELECT (ROW_NUMBER() OVER(ORDER BY syst.object_id ASC) )AS id,syst.name as tb_name FROM sys.Tables syst where syst.name <> 'sysdiagrams';
+declare @indexTables varchar(max)=(select '<li class="list-group-item"><a class="btn btn-link" href="#'+tb_name+'" onclick="$(''#show_'+tb_name+''').click().focus()">'+tb_name+'</a></li>' From @tables FOR XML PATH(''));
+set @Html = REPLACE(@Html,'@indexTables',replace( replace( @indexTables, '&lt;', '<' ), '&gt;', '>' ));
+----Declarar contador para recorrer las tablas
+declare @counter int;
+set @counter = (select COUNT(*) from @tables);
+--Crear while para recorrer lista de tablas
+while @counter>0 BEGIN---Inicio del while
+declare @tmp_id int;
+declare @tmp_tb_name varchar(255);
+select @tmp_id=id,@tmp_tb_name=tb_name from @tables order by id;
+delete @tables where id=@tmp_id;
+----Crear  formato principal de cada tabla
+--set @HTML+='<h2>'+@tmp_tb_name+'</h2>';
+set @Html+='<br>'
+---Crear los rows de las tablas
+declare @tmphtml varchar(max);
+set @tmphtml = cast((
+select 
+	--d.object_id,
+	--a.name [table], 
+	--schema_name(a.schema_id) schema_name, 
+	--a.create_date,
+	'<td>' + convert(varchar(500),b.name) +'</td>' , 
+	'<td>' +convert(varchar(500),c.name) +'</td>' , 
+	'<td>' +CASE	
+		WHEN c.name = 'numeric' OR  c.name = 'decimal' OR c.name = 'float'  THEN convert(varchar(500),b.precision)
+		ELSE ''
+	END +'</td>', 
+	'<td>' + convert(varchar(5),b.max_length)+'</td>', 
+	'<td>' +CASE 
+		WHEN b.is_nullable = 0 THEN 'NO'
+		ELSE 'SI'
+	END +'</td>',
+	'<td>'+CASE 
+		WHEN b.is_identity = 0 THEN 'NO'
+		ELSE 'SI'
+	END +'</td>',	
+	'<td>'+ISNULL(convert(varchar(2000),ep.value ),'')+'</td>',
+	'<td>'+ISNULL(f.ForeignKey,'')+'</td>',
+	'<td>'+ISNULL(f.ReferenceTableName,'')+'</td>',
+	'<td>'+ISNULL(f.ReferenceColumnName,'')+'</td>'
+from sys.tables a 
+	inner join sys.columns b on a.object_id= b.object_id 
+	inner join sys.systypes c on b.system_type_id= c.xtype 
+	inner join sys.objects d on a.object_id= d.object_id 
+	LEFT JOIN sys.extended_properties ep ON d.object_id = ep.major_id AND b.column_Id = ep.minor_id
+	LEFT JOIN (SELECT 
+				f.name AS ForeignKey,
+				OBJECT_NAME(f.parent_object_id) AS TableName,
+				COL_NAME(fc.parent_object_id,fc.parent_column_id) AS ColumnName,
+				OBJECT_NAME (f.referenced_object_id) AS ReferenceTableName,
+				COL_NAME(fc.referenced_object_id,fc.referenced_column_id) AS ReferenceColumnName
+				FROM sys.foreign_keys AS f
+				INNER JOIN sys.foreign_key_columns AS fc ON f.OBJECT_ID = fc.constraint_object_id) 	f ON f.TableName =a.name AND f.ColumnName =b.name
+WHERE a.name = @tmp_tb_name 
+ORDER BY a.name,b.column_Id for xml path( 'tr' ), type ) as varchar(max));
+
+set @tmphtml ='<div class="card" id="'+@tmp_tb_name+'">
+    <div class="card-header" data-toggle="collapse" href="#collapse_'+@tmp_tb_name+'" id="show_'+@tmp_tb_name+'">'+@tmp_tb_name+'</div>
+	<div id="collapse_'+@tmp_tb_name+'" class="collapse" data-parent="#accordion">
+	<div class="card-body" ><div>
+<table class="table table-bordered table-hover"data-toggle="table"
+  data-search="true"
+  data-show-columns="true"
+  data-page-size="15"
+  data-pagination="true"
+  >'
++ '
+<thead class="thead-dark">
+<tr>
+<th>Columna</th>
+<th>Type</th>
+<th>Precision</th>
+<th>Max Lenght</th>
+<th>Permite Nulls</th>
+<th>Auto Incremental</th>
+<th>Descripción</th>
+<th>Foreing Key</th>
+<th>Reference Table</th>
+<th>Reference Column Name</th>
+</tr>
+</thead>
+<tbody>
+'+replace( replace( @tmphtml, '&lt;', '<' ), '&gt;', '>' )
++ '</tbody>
+</table> 
+</div>
+</div>
+</div>
+</div>'
+set @Html+=@tmphtml;
+---Fin declaracion de la tabla
+---Actualizar contador
+set @counter = (select COUNT(*) from @tables);
+END---Fin del while
+---Cerrar el valor final
+set @HTML +='</div>
+<footer class="page-footer font-small special-color-dark pt-4">
+  <div class="container">
+    <div class="row">
+  <div class="footer-copyright text-center py-3">© 2020 Copyright:
+    <a href=""> Power by Edgar Carrera</a>
+  </div>
+</footer>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.16.0/umd/popper.min.js"></script>
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+<script src="https://unpkg.com/bootstrap-table@1.18.0/dist/bootstrap-table.min.js"></script>
+</body></html>';
+----Retornar valor  final 
+
+Return @HTML;
+End
